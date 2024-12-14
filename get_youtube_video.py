@@ -86,7 +86,7 @@ def save_excel(items: list[YoutubeVideo]):
 def main():
     service = get_youtube_service()
 
-    channel_id = "UCxNoKygeZIE1AwZ_NdUCkhQ"
+    # channel_id = "UCxNoKygeZIE1AwZ_NdUCkhQ"
     # next_page_token = ""
     # playlist_id = ""
     # while True:
