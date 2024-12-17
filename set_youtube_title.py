@@ -1,7 +1,6 @@
 import os
 import pickle
-
-# from pprint import pprint
+from pprint import pprint
 from dataclasses import dataclass
 from typing import Generator
 
@@ -65,7 +64,7 @@ def get_youtube_service():
         TOKEN_FILENAME,
         CREDENTIAL_FILENAME,
         SCOPES,
-        # reflash=False,
+        # reflash=True,
     )
     return service
 
@@ -97,7 +96,7 @@ def get_video_list_from_xlsx(filename: str) -> Generator[YoutubeVideo, None, Non
     for row in ws.iter_rows(min_row=2, values_only=True):
         if not row[0]:
             continue
-        video = YoutubeVideo(row[0], row[4], row[5])  # TODO: Excelフォーマットで見直し
+        video = YoutubeVideo(row[0], row[2], row[3])
         yield video
 
 
@@ -108,9 +107,10 @@ def main(video: YoutubeVideo):
     video_description = video.description
 
     snippet = get_video_info(service, video_id)
-    # pprint(snippet)
+    # del snippet["publishedAt"]
     snippet["title"] = video_title
     snippet["description"] = video_description
+    # pprint(snippet)
     response1 = set_video_snippet(service, video_id, snippet)
     print(response1.get("id"), video_title)
     # pprint(response)
