@@ -107,7 +107,6 @@ def main(video: YoutubeVideo):
     video_description = video.description
 
     snippet = get_video_info(service, video_id)
-    # del snippet["publishedAt"]
     snippet["title"] = video_title
     snippet["description"] = video_description
     # pprint(snippet)
