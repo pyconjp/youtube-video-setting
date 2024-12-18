@@ -65,8 +65,8 @@ def get_youtube_service():
 class YoutubeVideo:
     id: str
     title: str
-    status: str | None = None
     description: str | None = None
+    status: str | None = None
     playlist_id: str | None = None
 
 
@@ -74,10 +74,10 @@ def save_excel(items: list[YoutubeVideo]):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Videos"
-    ws.append(["ID", "Title", "Status", "Description", "Playlist ID"])
+    ws.append(["ID", "Title", "Description", "Status", "Playlist ID"])
     for item in items:
         ws.append(
-            [item.id, item.title, item.status, item.description, item.playlist_id]
+            [item.id, item.title, item.description, item.status, item.playlist_id]
         )
     now = datetime.now()
     wb.save(f"youtube-videos-{now:%Y%m%d}.xlsx")
@@ -127,7 +127,8 @@ def main():
             # pprint(item)
             id = item["snippet"]["resourceId"]["videoId"]
             title = item["snippet"]["title"]
-            video = YoutubeVideo(id, title)
+            description = item["snippet"]["description"]
+            video = YoutubeVideo(id, title, description=description)
             items.append(video)
         next_page_token = search_response.get("nextPageToken", "")
         if not next_page_token:
