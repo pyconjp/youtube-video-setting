@@ -134,7 +134,7 @@ def main():
         if not next_page_token:
             break
     save_excel(reversed(items))
-    pprint(items)
+    # pprint(items)
     print(len(items))
 
 
