@@ -92,7 +92,7 @@ def get_video_list_from_xlsx(filename: str) -> Generator[YoutubeThumb, None, Non
     for row in ws.iter_rows(min_row=2, values_only=True):
         if not row[0]:
             continue
-        video = YoutubeThumb(row[1], row[2])
+        video = YoutubeThumb(row[1], row[3])
         yield video
 
 
@@ -116,7 +116,8 @@ if __name__ == "__main__":
     filename = args[1]
 
     videos_info = get_video_list_from_xlsx(filename)
+    # print(list(videos_info))
 
     for i, video in enumerate(videos_info):
-        print(i, end=": ")
+        print(i, video.video_id, end=": ")
         main(video)

@@ -166,3 +166,6 @@ uv.lock
 client_secret.json
 token.pickle
 *.xlsx
+thumbnails/*.png
+thumbnails/*.zip
+.DS_Store
