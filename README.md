@@ -39,3 +39,16 @@ YouTube 動画を API 経由で設定する
     - Status ・・現状使っていない
     - Video タイトル
     - Video ディスクリプション
+- 動画のステイタスを変更する
+  - `python set_youtube_status.py EXCEL_FILENAME`
+  - Excel ファイルには以下のカラムが必要
+    - Check ・・使っていない
+    - Video ID
+    - Status ・・ `public` or `private`, `unlisted` を入れる
+- 動画のサムネイルを入れる
+  - `python set_youtube_thumb.py EXCEL_FILENAME`
+  - Excel ファイルは以下のカラムが必要
+    - Check ・・使っていない
+    - Video ID
+    - Status ・・現状使っていない
+    - thumb (サムネイルのファイルID(.pngを除くファイル名))
