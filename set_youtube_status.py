@@ -93,8 +93,8 @@ def main(video: YoutubeVideo):
     video_id = video.video_id
     video_status = video.status
 
-    response1 = set_video_status(service, video_id, video_status)
-    print(response1.get("id"), response1.get("status"))
+    response = set_video_status(service, video_id, video_status)
+    print(response.get("id"), response.get("status"))
     # pprint(response)
 
 
