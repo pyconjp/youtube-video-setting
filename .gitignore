@@ -164,7 +164,7 @@ cython_debug/
 uv.lock
 .python-version
 client_secret.json
-token.pickle
+token*.pickle
 *.xlsx
 thumbnails/*.png
 thumbnails/*.zip

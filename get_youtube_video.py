@@ -107,7 +107,7 @@ def main():
     # pprint(playlist_id)
 
     #
-    playlist_id = "PLMkWB0UjwFGmeCsQBaDYh1pcoDdSXaCQG"
+    playlist_id = "PLMkWB0UjwFGmjkZ_yH6Mr3853R8HINm-X"  # PyCon JP 2025
 
     next_page_token = ""
     items = []
