@@ -69,10 +69,10 @@ def get_youtube_service():
     return service
 
 
-def set_video_status(service, video_id: str, status: str):
+def set_video_status(service, video_id: str, status: str, license: str = "creativeCommon"):
     request = service.videos().update(
         part="status",
-        body={"id": video_id, "status": {"privacyStatus": status}},
+        body={"id": video_id, "status": {"privacyStatus": status, "license": license}},
     )
     response = request.execute()
     return response
@@ -84,7 +84,7 @@ def get_video_list_from_xlsx(filename: str) -> Generator[YoutubeVideo, None, Non
     for row in ws.iter_rows(min_row=2, values_only=True):
         if not row[0]:
             continue
-        video = YoutubeVideo(row[1], row[2])
+        video = YoutubeVideo(row[0], row[1])
         yield video
 
 
