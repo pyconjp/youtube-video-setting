@@ -17,6 +17,18 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube",
 ]
 
+# videos.update で送れる status の書き込み可能なプロパティ。
+# ここに無いもの（uploadStatus など）は読み取り専用なので送らない。
+# https://developers.google.com/youtube/v3/docs/videos#status
+MUTABLE_STATUS_FIELDS = (
+    "privacyStatus",
+    "license",
+    "embeddable",
+    "publicStatsViewable",
+    "selfDeclaredMadeForKids",
+    "containsSyntheticMedia",
+)
+
 
 # video_id, title, status, description, playlist_id, thumbnail
 @dataclass
@@ -69,10 +81,45 @@ def get_youtube_service():
     return service
 
 
+def get_video_status(service, video_id: str) -> dict:
+    """動画の現在の status パートを取得する。"""
+    request = service.videos().list(part="status", id=video_id)
+    response = request.execute()
+    items = response.get("items", [])
+    if not items:
+        raise LookupError(f"動画が見つかりません: {video_id}")
+    return items[0]["status"]
+
+
+def build_status_body(current: dict, privacy_status: str) -> dict:
+    """現在の status を引き継いだうえで privacyStatus だけ差し替える。
+
+    videos.update はリクエストボディに含めなかった書き込み可能プロパティを
+    「消す」仕様なので、privacyStatus だけを送ると license や
+    selfDeclaredMadeForKids などが既定値に戻ってしまう。
+    そのため取得した値をそのまま詰め直す。
+    https://developers.google.com/youtube/v3/docs/videos/update
+    """
+    status = {key: current[key] for key in MUTABLE_STATUS_FIELDS if key in current}
+
+    # 子ども向け設定は書き込み用のプロパティ名が selfDeclaredMadeForKids。
+    # 管理画面から設定した動画は madeForKids しか返らないことがある。
+    if "selfDeclaredMadeForKids" not in status and "madeForKids" in current:
+        status["selfDeclaredMadeForKids"] = current["madeForKids"]
+
+    # publishAt は「まだ公開していない private 動画」にだけ指定できる。
+    if privacy_status == "private" and "publishAt" in current:
+        status["publishAt"] = current["publishAt"]
+
+    status["privacyStatus"] = privacy_status
+    return status
+
+
 def set_video_status(service, video_id: str, status: str):
+    current = get_video_status(service, video_id)
     request = service.videos().update(
         part="status",
-        body={"id": video_id, "status": {"privacyStatus": status}},
+        body={"id": video_id, "status": build_status_body(current, status)},
     )
     response = request.execute()
     return response
