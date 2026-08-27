@@ -1,23 +1,14 @@
-import os
-import pickle
-from pprint import pprint
+"""Excel の内容にしたがって YouTube 動画のタイトルと説明文を設定する。"""
+
 from dataclasses import dataclass
 from typing import Generator
 
-from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore
-from google.auth.transport.requests import Request  # type: ignore
-from googleapiclient.discovery import build  # type: ignore
 import openpyxl  # type: ignore
+from googleapiclient.errors import HttpError  # type: ignore
+
+from youtube_api import MUTABLE_SNIPPET_FIELDS, get_youtube_service
 
 
-TOKEN_FILENAME = "token.pickle"
-CREDENTIAL_FILENAME = "client_secret.json"
-SCOPES = [
-    "https://www.googleapis.com/auth/youtube",
-]
-
-
-# video_id, title, status, description, playlist_id, thumbnail
 @dataclass
 class YoutubeVideo:
     video_id: str
@@ -25,69 +16,46 @@ class YoutubeVideo:
     description: str | None
 
 
-def initialize_service(token_filename, credential_filename, scopes, reflash=False):
-    """"""
-    # Disable OAuthlib's HTTPS verification when running locally.
-    # *DO NOT* leave this option enabled in production.
-    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
-    api_service_name = "youtube"
-    api_version = "v3"
-
-    creds = None
-    # The file token.pickle stores the user's access and refresh tokens, and is
-    # created automatically when the authorization flow completes for the first
-    # time.
-    if not reflash and os.path.exists(token_filename):
-        with open(token_filename, "rb") as token:
-            creds = pickle.load(token)
-    # If there are no (valid) credentials available, let the user log in.
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                credential_filename, scopes
-            )
-            creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open(token_filename, "wb") as token:
-            pickle.dump(creds, token)
-    # Build the service object.
-    service = build(
-        api_service_name, api_version, credentials=creds, cache_discovery=False
-    )
-    return service
-
-
-def get_youtube_service():
-    service = initialize_service(
-        TOKEN_FILENAME,
-        CREDENTIAL_FILENAME,
-        SCOPES,
-        # reflash=True,
-    )
-    return service
-
-
-def get_video_info(service, video_id):
-    request = service.videos().list(
-        part="snippet",
-        id=video_id,
-    )
+def get_video_snippet(service, video_id: str) -> dict:
+    """動画の現在の snippet パートを取得する。"""
+    request = service.videos().list(part="snippet", id=video_id)
     response = request.execute()
-    return response["items"][0]["snippet"]
+    items = response.get("items", [])
+    if not items:
+        raise LookupError(f"動画が見つかりません: {video_id}")
+    return items[0]["snippet"]
 
 
-def set_video_snippet(service, video_id, snippet):
+def build_snippet_body(
+    current: dict, title: str | None, description: str | None
+) -> dict:
+    """現在の snippet を引き継いだうえでタイトルと説明文を差し替える。
+
+    videos.update はリクエストボディに含めなかった書き込み可能プロパティを
+    「消す」仕様なので、tags や defaultLanguage も詰め直す必要がある。
+    thumbnails や channelTitle などの読み取り専用プロパティは送らない。
+    https://developers.google.com/youtube/v3/docs/videos/update
+    """
+    snippet = {key: current[key] for key in MUTABLE_SNIPPET_FIELDS if key in current}
+
+    if title is not None:
+        snippet["title"] = title
+    if description is not None:
+        snippet["description"] = description
+
+    # snippet を更新するときは title と categoryId が必須。
+    for key in ("title", "categoryId"):
+        if not snippet.get(key):
+            raise ValueError(f"snippet の更新には {key} が必要です")
+    return snippet
+
+
+def set_video_snippet(service, video_id: str, snippet: dict) -> dict:
     request = service.videos().update(
         part="snippet",
-        body={
-            "id": video_id,
-            "snippet": snippet,
-        },
+        body={"id": video_id, "snippet": snippet},
     )
-    response = request.execute()
-    return response
+    return request.execute()
 
 
 def get_video_list_from_xlsx(filename: str) -> Generator[YoutubeVideo, None, None]:
@@ -100,19 +68,26 @@ def get_video_list_from_xlsx(filename: str) -> Generator[YoutubeVideo, None, Non
         yield video
 
 
-def main(video: YoutubeVideo):
+def main(filename: str) -> int:
     service = get_youtube_service()
-    video_id = video.video_id
-    video_title = video.title
-    video_description = video.description
+    failed = 0
 
-    snippet = get_video_info(service, video_id)
-    snippet["title"] = video_title
-    snippet["description"] = video_description
-    # pprint(snippet)
-    response1 = set_video_snippet(service, video_id, snippet)
-    print(response1.get("id"), video_title)
-    # pprint(response)
+    for i, video in enumerate(get_video_list_from_xlsx(filename)):
+        print(i, video.video_id, end=": ")
+        try:
+            current = get_video_snippet(service, video.video_id)
+            snippet = build_snippet_body(current, video.title, video.description)
+            response = set_video_snippet(service, video.video_id, snippet)
+        except (HttpError, LookupError, ValueError) as e:
+            # 1本失敗しても残りの動画の処理は続ける。
+            failed += 1
+            print(f"NG {e}")
+            continue
+        print(response["snippet"]["title"])
+
+    if failed:
+        print(f"{failed} 本の動画で失敗しました")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
@@ -121,11 +96,5 @@ if __name__ == "__main__":
     args = sys.argv
     if len(args) < 2:
         print("Usage: python set_youtube_title.py <filename>")
-        sys.exit()
-    filename = args[1]
-
-    videos_info = get_video_list_from_xlsx(filename)
-
-    for i, video in enumerate(videos_info):
-        print(i, end=": ")
-        main(video)
+        sys.exit(1)
+    sys.exit(main(args[1]))

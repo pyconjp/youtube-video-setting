@@ -165,6 +165,7 @@ uv.lock
 .python-version
 client_secret.json
 token.pickle
+token.json
 *.xlsx
 thumbnails/*.png
 thumbnails/*.zip

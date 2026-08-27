@@ -1,25 +1,21 @@
-import os
-import pickle
-from pathlib import Path
+"""Excel の内容にしたがって YouTube 動画のサムネイルを設定する。"""
 
-# from pprint import pprint
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Generator
 
-from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore
-from google.auth.transport.requests import Request  # type: ignore
-from googleapiclient.discovery import build  # type: ignore
-from googleapiclient.http import MediaFileUpload  # type: ignore
 import openpyxl  # type: ignore
+from googleapiclient.errors import HttpError  # type: ignore
+from googleapiclient.http import MediaFileUpload  # type: ignore
 
+from youtube_api import BASE, get_youtube_service
 
-BASE = Path(__file__).resolve().parent
-THMUB_DIR = BASE / "thumbnails"
-TOKEN_FILENAME = "token.pickle"
-CREDENTIAL_FILENAME = "client_secret.json"
-SCOPES = [
-    "https://www.googleapis.com/auth/youtube",
-]
+THUMB_DIR = BASE / "thumbnails"
+
+# thumbnails.set が受け付ける形式とサイズ上限。
+# https://developers.google.com/youtube/v3/docs/thumbnails/set
+MIME_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+MAX_THUMB_BYTES = 2 * 1024 * 1024
 
 
 @dataclass
@@ -28,62 +24,42 @@ class YoutubeThumb:
     thumb: str
 
     @property
-    def thumb_filename(self):
+    def thumb_filename(self) -> str:
+        # Excel には拡張子なしのファイル名が入っている想定。
+        if Path(self.thumb).suffix.lower() in MIME_TYPES:
+            return self.thumb
         return f"{self.thumb}.png"
 
 
-def initialize_service(token_filename, credential_filename, scopes, reflash=False):
-    """"""
-    # Disable OAuthlib's HTTPS verification when running locally.
-    # *DO NOT* leave this option enabled in production.
-    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
-    api_service_name = "youtube"
-    api_version = "v3"
+def find_thumb_path(thumb_filename: str) -> Path:
+    """サムネイル画像のパスを検証して返す。"""
+    thumb_path = THUMB_DIR / thumb_filename
+    if not thumb_path.is_file():
+        raise FileNotFoundError(f"サムネイルがありません: {thumb_path}")
 
-    creds = None
-    # The file token.pickle stores the user's access and refresh tokens, and is
-    # created automatically when the authorization flow completes for the first
-    # time.
-    if not reflash and os.path.exists(token_filename):
-        with open(token_filename, "rb") as token:
-            creds = pickle.load(token)
-    # If there are no (valid) credentials available, let the user log in.
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                credential_filename, scopes
-            )
-            creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open(token_filename, "wb") as token:
-            pickle.dump(creds, token)
-    # Build the service object.
-    service = build(
-        api_service_name, api_version, credentials=creds, cache_discovery=False
-    )
-    return service
+    suffix = thumb_path.suffix.lower()
+    if suffix not in MIME_TYPES:
+        raise ValueError(f"対応していない画像形式です: {thumb_path.name}")
+
+    size = thumb_path.stat().st_size
+    if size > MAX_THUMB_BYTES:
+        raise ValueError(
+            f"サムネイルが 2MB を超えています ({size / 1024 / 1024:.2f}MB): "
+            f"{thumb_path.name}"
+        )
+    return thumb_path
 
 
-def get_youtube_service():
-    service = initialize_service(
-        TOKEN_FILENAME,
-        CREDENTIAL_FILENAME,
-        SCOPES,
-        # reflash=True,
-    )
-    return service
-
-
-def set_video_thumb(service, video_id: str, thumb_filename: str):
-    thumb_path = THMUB_DIR / thumb_filename
+def set_video_thumb(service, video_id: str, thumb_filename: str) -> dict:
+    thumb_path = find_thumb_path(thumb_filename)
     request = service.thumbnails().set(
         videoId=video_id,
-        media_body=MediaFileUpload(thumb_path),
+        media_body=MediaFileUpload(
+            str(thumb_path),
+            mimetype=MIME_TYPES[thumb_path.suffix.lower()],
+        ),
     )
-    response = request.execute()
-    return response
+    return request.execute()
 
 
 def get_video_list_from_xlsx(filename: str) -> Generator[YoutubeThumb, None, None]:
@@ -96,14 +72,27 @@ def get_video_list_from_xlsx(filename: str) -> Generator[YoutubeThumb, None, Non
         yield video
 
 
-def main(video: YoutubeThumb):
+def main(filename: str) -> int:
     service = get_youtube_service()
-    video_id = video.video_id
-    thumb_filename = video.thumb_filename
+    failed = 0
 
-    response = set_video_thumb(service, video_id, thumb_filename)
-    print(response.get("id"), response.get("status"))
-    # pprint(response)
+    for i, video in enumerate(get_video_list_from_xlsx(filename)):
+        print(i, video.video_id, end=": ")
+        try:
+            response = set_video_thumb(service, video.video_id, video.thumb_filename)
+        except (HttpError, FileNotFoundError, ValueError) as e:
+            # 1本失敗しても残りの動画の処理は続ける。
+            failed += 1
+            print(f"NG {e}")
+            continue
+        # thumbnails.set のレスポンスは items だけを返す（id や status は無い）。
+        items = response.get("items", [])
+        default = items[0].get("default", {}) if items else {}
+        print(default.get("url", "OK"))
+
+    if failed:
+        print(f"{failed} 本の動画で失敗しました")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
@@ -111,13 +100,6 @@ if __name__ == "__main__":
 
     args = sys.argv
     if len(args) < 2:
-        print("Usage: python set_youtube_title.py <filename>")
-        sys.exit()
-    filename = args[1]
-
-    videos_info = get_video_list_from_xlsx(filename)
-    # print(list(videos_info))
-
-    for i, video in enumerate(videos_info):
-        print(i, video.video_id, end=": ")
-        main(video)
+        print("Usage: python set_youtube_thumb.py <filename>")
+        sys.exit(1)
+    sys.exit(main(args[1]))

@@ -1,64 +1,21 @@
+"""再生リストの動画一覧を取得して Excel に書き出す。"""
+
+import argparse
 import os
-from datetime import datetime
-import pickle
-from pprint import pprint
 from dataclasses import dataclass
+from datetime import datetime
 
-from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore
-from google.auth.transport.requests import Request  # type: ignore
-from googleapiclient.discovery import build  # type: ignore
 import openpyxl  # type: ignore
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE  # type: ignore
 
+from youtube_api import get_youtube_service
 
-TOKEN_FILENAME = "token.pickle"
-CREDENTIAL_FILENAME = "client_secret.json"
-SCOPES = [
-    "https://www.googleapis.com/auth/youtube",
-]
+# PyCon JP 2024 の再生リスト。環境変数 YOUTUBE_PLAYLIST_ID か
+# コマンドライン引数で上書きできる。
+DEFAULT_PLAYLIST_ID = "PLMkWB0UjwFGmeCsQBaDYh1pcoDdSXaCQG"
 
-
-def initialize_service(token_filename, credential_filename, scopes, reflash=False):
-    """"""
-    # Disable OAuthlib's HTTPS verification when running locally.
-    # *DO NOT* leave this option enabled in production.
-    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
-    api_service_name = "youtube"
-    api_version = "v3"
-
-    creds = None
-    # The file token.pickle stores the user's access and refresh tokens, and is
-    # created automatically when the authorization flow completes for the first
-    # time.
-    if not reflash and os.path.exists(token_filename):
-        with open(token_filename, "rb") as token:
-            creds = pickle.load(token)
-    # If there are no (valid) credentials available, let the user log in.
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                credential_filename, scopes
-            )
-            creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open(token_filename, "wb") as token:
-            pickle.dump(creds, token)
-    # Build the service object.
-    service = build(
-        api_service_name, api_version, credentials=creds, cache_discovery=False
-    )
-    return service
-
-
-def get_youtube_service():
-    service = initialize_service(
-        TOKEN_FILENAME,
-        CREDENTIAL_FILENAME,
-        SCOPES,
-        # reflash=True,
-    )
-    return service
+# playlistItems.list / videos.list の 1 リクエストあたりの最大件数。
+MAX_RESULTS = 50
 
 
 @dataclass
@@ -70,72 +27,101 @@ class YoutubeVideo:
     playlist_id: str | None = None
 
 
-def save_excel(items: list[YoutubeVideo]):
+def get_playlist_videos(service, playlist_id: str) -> list[YoutubeVideo]:
+    """再生リストに入っている動画をすべて取得する。"""
+    next_page_token = ""
+    items: list[YoutubeVideo] = []
+    while True:
+        response = (
+            service.playlistItems()
+            .list(
+                part="id,snippet",
+                playlistId=playlist_id,
+                maxResults=MAX_RESULTS,
+                pageToken=next_page_token,
+            )
+            .execute()
+        )
+        for item in response["items"]:
+            snippet = item["snippet"]
+            items.append(
+                YoutubeVideo(
+                    id=snippet["resourceId"]["videoId"],
+                    title=snippet["title"],
+                    description=snippet["description"],
+                    playlist_id=playlist_id,
+                )
+            )
+        next_page_token = response.get("nextPageToken", "")
+        if not next_page_token:
+            break
+    return items
+
+
+def fill_privacy_status(service, videos: list[YoutubeVideo]) -> None:
+    """各動画の公開ステータスを videos.list でまとめて取得して埋める。
+
+    playlistItems.list は公開ステータスを返さないため別途取得する。
+    50件ずつまとめて問い合わせるのでクォータの消費は 1 件あたり 1 ユニット未満。
+    """
+    by_id = {video.id: video for video in videos}
+    ids = list(by_id)
+    for start in range(0, len(ids), MAX_RESULTS):
+        chunk = ids[start : start + MAX_RESULTS]
+        response = service.videos().list(part="status", id=",".join(chunk)).execute()
+        for item in response.get("items", []):
+            by_id[item["id"]].status = item["status"]["privacyStatus"]
+
+
+def _clean(value: str | None) -> str | None:
+    """Excel に書けない制御文字を取り除く。"""
+    if value is None:
+        return None
+    return ILLEGAL_CHARACTERS_RE.sub("", value)
+
+
+def save_excel(items: list[YoutubeVideo]) -> str:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Videos"
     ws.append(["ID", "Title", "Description", "Status", "Playlist ID"])
     for item in items:
         ws.append(
-            [item.id, item.title, item.description, item.status, item.playlist_id]
+            [
+                item.id,
+                _clean(item.title),
+                _clean(item.description),
+                item.status,
+                item.playlist_id,
+            ]
         )
     now = datetime.now()
-    wb.save(f"youtube-videos-{now:%Y%m%d}.xlsx")
+    filename = f"youtube-videos-{now:%Y%m%d}.xlsx"
+    wb.save(filename)
+    return filename
 
 
-def main():
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "playlist_id",
+        nargs="?",
+        default=os.environ.get("YOUTUBE_PLAYLIST_ID", DEFAULT_PLAYLIST_ID),
+        help="対象の再生リスト ID（環境変数 YOUTUBE_PLAYLIST_ID でも指定できる）",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
     service = get_youtube_service()
 
-    # channel_id = "UCxNoKygeZIE1AwZ_NdUCkhQ"
-    # next_page_token = ""
-    # playlist_id = ""
-    # while True:
-    #     playlists_request = (
-    #         service.playlists()
-    #         .list(part="id,snippet", channelId=channel_id, pageToken=next_page_token)
-    #         .execute()
-    #     )
-    #     for item in playlists_request["items"]:
-    #         playlist_title = item["snippet"]["title"]
-    #         if "2024" in playlist_title:
-    #             playlist_id = item["id"]
-    #             break
-    #         print(item["snippet"]["title"])
-    #     next_page_token = playlists_request.get("nextPageToken", "")
-    #     if not next_page_token:
-    #         break
-    # pprint(playlist_id)
+    items = get_playlist_videos(service, args.playlist_id)
+    fill_privacy_status(service, items)
 
-    #
-    playlist_id = "PLMkWB0UjwFGmeCsQBaDYh1pcoDdSXaCQG"
-
-    next_page_token = ""
-    items = []
-    while True:
-        search_response = (
-            service.playlistItems()
-            .list(
-                part="id,snippet",
-                playlistId=playlist_id,
-                maxResults=50,
-                # q="",
-                pageToken=next_page_token,
-            )
-            .execute()
-        )
-        for item in search_response["items"]:
-            # pprint(item)
-            id = item["snippet"]["resourceId"]["videoId"]
-            title = item["snippet"]["title"]
-            description = item["snippet"]["description"]
-            video = YoutubeVideo(id, title, description=description)
-            items.append(video)
-        next_page_token = search_response.get("nextPageToken", "")
-        if not next_page_token:
-            break
-    save_excel(reversed(items))
-    # pprint(items)
-    print(len(items))
+    # 再生リストは新しい動画が先頭に来るので、古い順に並べ直して書き出す。
+    filename = save_excel(items[::-1])
+    print(f"{len(items)} 本の動画を {filename} に書き出しました")
 
 
 if __name__ == "__main__":
